@@ -420,7 +420,126 @@ class FT260_I2C():
                     buf.append(msg.buf[i][0])
                 self._write_i2c(msg.addr, buf, flags)
 
+PUD_OFF = 0
+PUD_DOWN = 1
+PUD_UP = 2
 
+OUT = 0
+IN = 1
+HIGH = True
+LOW = False
+
+RISING = 1
+FALLING = 2
+BOTH = 3
+
+class FT260_GPIO():
+
+    # Pins DIO5/6 are I2C pins
+    PINS = {
+        0: {
+            "name": "GPIOA",
+        }, 
+        1: {
+            "name": "GPIOB"
+        }, 
+        2: {
+            "name": "GPIOE"
+        }, 
+        3: {
+            "name": "GPIOC"
+        }, 
+        4: {
+            "name": "GPIOD"
+        }, 
+        5: {
+            "name": "GPIO0"
+        },
+        7: {
+            "name": "GPIO2"
+        }, 
+        8: {
+            "name": "GPIO3"
+        }, 
+        9: {
+            "name": "GPIOF"
+        }, 
+        10: {
+            "name": "GPIO4"
+        }, 
+        11: {
+            "name": "GPIO5"
+        }, 
+        12: {
+            "name": "GPIOG"
+        }, 
+        13: {
+            "name": "GPIOH"
+        }
+    }
+
+    @staticmethod
+    def _gpio_bank(pin) -> tuple[int, int]:
+        b = FT260_GPIO.PINS[pin]["name"][-1]
+        if ord("0") <= b <= ord("5"):
+            return (0, b-ord("0"))
+        if ord("A") <= b <= ord("H"):
+            return (1, b-ord("A"))
+        
+    def __init__(self, device: hid):
+        self._device = device
+
+    def _read_gpios(self):
+        report = self._device.get_feature_report(0xB0, 61)
+        return report[1:4]
+
+    def setup(self, pin, mode, pull_up_down=PUD_OFF):
+        assert pull_up_down == PUD_OFF
+        bank, bit = self._gpio_bank(pin)
+
+        raise NotImplementedError
+    
+    def output(self, pin, value):
+        raise NotImplementedError
+    
+    def input(self, pin):
+        raise NotImplementedError
+    
+    def set_high(self, pin):
+        raise NotImplementedError
+    
+    def set_low(self, pin):
+        raise NotImplementedError
+    
+    def is_high(self, pin):
+        raise NotImplementedError
+    
+    def is_low(self, pin):
+        raise NotImplementedError
+    
+    def output_pins(self, pins):
+        raise NotImplementedError
+    
+    def setup_pins(self, pins):
+        raise NotImplementedError
+    
+    def add_event_detect(self, pin, edge):
+        raise NotImplementedError
+    
+    def remove_event_detect(self, pin):
+        raise NotImplementedError
+    
+    def add_event_callback(self, pin, callback):
+        raise NotImplementedError
+    
+    def event_detected(self, pin):
+        raise NotImplementedError
+    
+    def wait_for_edfe(self, pin, edge):
+        raise NotImplementedError
+    
+    def cleanup(self, pin=None):
+        raise NotImplementedError
     
 
 class FT260():
