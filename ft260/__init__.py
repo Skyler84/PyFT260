@@ -64,7 +64,7 @@ class FT260_I2C():
     This library was developed as part of MLAB project. Visit https://mlab.cz for more information.
     """
 
-    def __init__(self, hid_device=None, vid=None, pid=None, debug: bool = False):
+    def __init__(self, hid_device=None, vid=None, pid=None, debug: bool = False, ft260 = None):
         self.driver_type = 'ft260_hid'
         self.device = None
         self.debug = bool(debug)
@@ -80,6 +80,11 @@ class FT260_I2C():
             logger.debug(f"Opened HID device VID=0x{vid:04X}, PID=0x{pid:04X}")
         else:
             raise ValueError("Either hid_device or vid and pid must be provided.")
+
+        if ft260 is not None:
+            self._ft260 = ft260
+        else:
+            self._ft260 = FT260(hid_device=self.device, i2c=self, debug=self.debug)
 
         #self.initialize_ftdi()
         self.device.set_nonblocking(0)
@@ -120,7 +125,7 @@ class FT260_I2C():
 
         data = []
         while len(data) < length:
-            report = self.device.read(64)
+            report = self._ft260.read_i2c_report()
             if not report:
                 raise IOError("Timeout waiting for I2C response")
 
@@ -439,42 +444,64 @@ class FT260_GPIO():
     PINS = {
         0: {
             "name": "GPIOA",
+            "functions": {
+                0: "GPIO",
+                3: "TX_ACTIVE",
+                4: "TX_LED"
+            }
         }, 
         1: {
-            "name": "GPIOB"
+            "name": "GPIOB",
         }, 
         2: {
-            "name": "GPIOE"
+            "name": "GPIOE",
         }, 
         3: {
-            "name": "GPIOC"
+            "name": "GPIOC",
         }, 
         4: {
-            "name": "GPIOD"
+            "name": "GPIOD",
         }, 
         5: {
-            "name": "GPIO0"
+            "name": "GPIO0",
+            "alt": "SCL",
+        },
+        6: {
+            "name": "GPIO1",
+            "alt": "SDA",
         },
         7: {
-            "name": "GPIO2"
+            "name": "GPIO2",
+            "functions": {
+                0: "GPIO",
+                1: "SUSPOUT",
+                2: "PWREN#",
+                4: "TX_LED"
+            }
         }, 
         8: {
-            "name": "GPIO3"
+            "name": "GPIO3",
         }, 
         9: {
-            "name": "GPIOF"
+            "name": "GPIOF",
         }, 
         10: {
-            "name": "GPIO4"
+            "name": "GPIO4",
         }, 
         11: {
-            "name": "GPIO5"
+            "name": "GPIO5",
         }, 
         12: {
-            "name": "GPIOG"
+            "name": "GPIOG",
+            "functions": {
+                0: "GPIO",
+                2: "PWREN#",
+                5: "RX_LED",
+                6: "BCD_DET",
+            }
         }, 
         13: {
-            "name": "GPIOH"
+            "name": "GPIOH",
         }
     }
 
@@ -543,14 +570,28 @@ class FT260_GPIO():
     
 
 class FT260():
-    def __init__(self, VID=0, PID=0, debug: bool = False):
-        self.VID = VID
-        self.PID = PID
-        self.device = hid.device()
+    def __init__(self, hid_device=None, VID=0, PID=0, debug: bool = False, i2c=None, uart=None, gpio=None):
+
+        if hid_device is not None:
+            self.device = hid_device
+            logger.debug("Using provided HID device instance")
+        elif VID is not None and PID is not None:
+            self.device = hid.device()
+            self.device.open(VID, PID)
+            logger.debug(f"Opened HID device VID=0x{VID:04X}, PID=0x{PID:04X}")
+        else:
+            raise ValueError("Either hid_device or VID and PID must be provided.")
+        
+        self._i2c = i2c
+        self._uart = uart
+        self._gpio = gpio
+        
         self.debug = bool(debug)
         if self.debug:
             logger.setLevel(logging.DEBUG)
-        self.open_hid()
+        if hid_device is None:
+            self.open_hid()
+        self.report_queue = []
 
     def __str__(self) -> str:
         return f"FT260 device with VID: {self.VID}, PID: {self.PID}, SN: {self.device.get_serial_number_string()}"
@@ -577,9 +618,65 @@ class FT260():
         status['baudrate'] = baudrate
 
         return status
+    
+    def read_input_report(self, timeout_ms: int, expected_ids: set[int]):
+
+        start_time = time.time()
+
+        # Prefer already-buffered reports before reading a new one.
+        for idx, report in enumerate(self.report_queue):
+            if report and report[0] in expected_ids:
+                return self.report_queue.pop(idx)
+
+        while True:
+            if timeout_ms > 0:
+                elapsed = (time.time() - start_time)*1000 # ms
+                remaining = timeout_ms - elapsed
+                if remaining <= 0:
+                    return None
+            else:
+                remaining = 0
+            
+            try:
+                buf = self.device.read(64, remaining)
+            except TypeError:
+                buf = self.device.read(64)
+
+            if not buf:
+                # Read timed out for this iteration; continue until global timeout.
+                continue
+
+            if buf[0] in expected_ids:
+                return buf
+
+            self.report_queue.append(buf)
+
+    
+    def read_i2c_report(self, timeout_ms=0, expected_report_ids=None):
+        if expected_report_ids is None:
+            expected_ids = set(range(0xD0, 0xDE))
+        elif isinstance(expected_report_ids, int):
+            expected_ids = {expected_report_ids}
+        else:
+            expected_ids = set(expected_report_ids)
+        return self.read_input_report(timeout_ms, expected_ids)
+    
+    def read_uart_report(self, timeout_ms=0, expected_report_ids=None):
+        if expected_report_ids is None:
+            expected_ids = set(range(0xF0, 0xFE))
+        elif isinstance(expected_report_ids, int):
+            expected_ids = {expected_report_ids}
+        else:
+            expected_ids = set(expected_report_ids)
+        return self.read_input_report(timeout_ms, expected_ids)
+    
+    def read_interrupt_report(self, timeout_ms=0):
+        return self.read_input_report(timeout_ms, {0xB1})
 
     def FT260_I2C(self):
-        return FT260_I2C(hid_device=self.device, debug=self.debug)
+        if self._i2c is None:
+            self._i2c = FT260_I2C(hid_device=self.device, debug=self.debug, ft260=self)
+        return self._i2c
 
     def FT260_UART(self):
         raise NotImplementedError("UART interface not implemented yet")
